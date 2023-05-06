@@ -1,0 +1,927 @@
+# for result reproducibility
+from numpy.random import seed
+seed(42)
+import tensorflow as tf
+tf.random.set_seed(42)
+
+
+import os
+import pandas as pd
+import numpy as np
+import seaborn as sns
+import matplotlib.pyplot as plt
+from mlxtend.plotting import plot_confusion_matrix
+
+
+from sklearn.model_selection import GridSearchCV
+from sklearn.preprocessing import StandardScaler
+from sklearn.model_selection import train_test_split
+
+
+# evaluation metrics
+from sklearn import metrics 
+
+
+# Model Algorithms
+from sklearn.svm import SVC
+from sklearn.linear_model import LogisticRegression 
+from sklearn.neighbors import KNeighborsClassifier
+from sklearn.ensemble import RandomForestClassifier
+from sklearn.ensemble import GradientBoostingClassifier
+from xgboost import XGBClassifier
+from tensorflow import keras
+from tensorflow.keras.utils import to_categorical
+from tensorflow.keras.models import Sequential
+from tensorflow.keras.layers import Dense, Dropout
+from tensorflow.keras import regularizers
+from tensorflow.keras.optimizers import Adam
+
+
+import warnings
+warnings.filterwarnings("ignore")
+
+
+#check that the data loaded in is in the correct format
+pd.set_option('display.max_columns', 500)
+
+
+# # 1. Read-In Data
+df = pd.read_csv(r"D:\Desktop\ADA Intership\Prof Proj\lung cancer\\Lung.csv")
+
+
+df.head()
+
+
+# # 2. Initial Data Exploration
+#print the dimension of the dataset
+print("The dataset contains %s rows and %s columns \n"%(df.shape[0],df.shape[1]))
+
+
+# show the first 10 rows using dataframe.head() method
+df.head(4)
+
+
+df.info()
+
+
+#get the data type of each column 
+D_types = df.dtypes
+
+
+print(D_types)
+
+
+# Datatype check above would help in deciding the best exploration approach to use on each variable.
+
+
+#get the number of missing values in each column of the dataset
+missing_count = df.isna().sum().sort_values(ascending=False)
+print(missing_count)
+
+
+
+#get the number of unique values in each column 
+n_unique = df.nunique()
+print(n_unique)
+
+
+# check for duplicate records
+
+
+df.duplicated().sum()
+
+
+# <p>
+# 
+# **Data Types** <br>
+# * From the result shown above, it is clear to see that the data type of all variables/columns is <code>integer</code> which is appropriate for our model to use. However, the `GENDER` and the `LUNG_CANCER` variables are categorical and need to be encoded.
+# 
+# **Missing Values**<br>
+# * As reported, it could be seen that there are no missing values.
+# 
+# **no_uniques**<br>
+# * All variables are categorical/discretized quantitative variables except `AGE` which is a quantitative variable.
+# * All categorical/discretized quantitative variables have two levels including the target variable
+# </p>
+# 
+# **Duplication**<br>
+# * There are 33 repeated records which will be required to be removed for the good of the models to be built
+# </p>
+# 
+
+
+# Now, let's see the **basic descriptive statistics** of the data:
+
+
+df.describe().T  #T transposes the resulting dataframe
+
+
+# <p>
+# This shows the statistical summary of all the columns.<br>
+# 
+# The **count** gives the total number of non-missing values (as seen from the earlier report, there were no missing value thereby, it returned 309 for all columns)
+# 
+# The **min** presents the minimum value in each column . 
+# 
+# **percentile (25%, 50%,75%)** is a score below which a given percentage of scores in its frequency distribution fall or a score at or below which a given percentage fall. For example, the 25th percentile for `AGE` was 57, which infers that 25 percentage of the respondents were 57 years old or less. 
+
+
+# # 3. Exploratory Data Analysis
+
+
+# ## Univariate exploration
+
+
+# ### Target/Class distribution
+
+
+#plot the distribution of the target variable
+plt.figure(figsize=(8,6))
+total = float(len(df))
+ax = sns.countplot(x='LUNG_CANCER', data=df)
+# plt.title("Target variable Class Distribution")
+plt.xlabel("Lung Cancer Status")
+for p in ax.patches:
+    percentage = '{:.1f}%'.format(100 * p.get_height()/total)
+    x = (p.get_x() + p.get_width())/1.5
+    y = p.get_height()
+    ax.annotate(percentage, (x, y),ha='right')
+plt.tight_layout()
+
+
+plt.savefig("class_distribution.jpeg")
+plt.show()
+
+
+# It could be seen that the class distribution isn't uniform (the frequency of class "YES" is greatly greater than class "NO"). There are approximately seven times the record of patients with lung cancer than those without. Hence, we have an **imbalanced dataset**. This is going to be an issue for our machine learning model and so, it is going to be treated/handled later on using SMOTE algorithm.
+# <br>
+# <br>
+# <br>
+# Now, let's ssee the distribution for other variables/potential features
+
+
+fig = plt.figure(figsize=(20,20))
+
+
+for i, col in enumerate(df.drop(columns="LUNG_CANCER").columns.to_list()):
+    ax1 = fig.add_subplot(5, 3, i+1)
+    sns.countplot(x=col, data=df, ax=ax1)
+plt.tight_layout()
+
+
+fig.savefig('univariate_plots.jpeg')
+plt.show()
+
+
+# The AGE variable which is the only quantitative variable has a guassian distribution which is of better advanatge to our model
+
+
+# ## Bi-variate exploration
+# 
+# Plots and inferences would be made from the proportion/ratio of the target variable among the categories of all other variables:
+
+
+fig = plt.figure(figsize=(20,20))
+
+
+for i, col in enumerate(df.drop(columns="LUNG_CANCER").columns.to_list()):
+    ax1 = fig.add_subplot(5, 3, i+1)
+    x, y, hue = col, "proportion", "LUNG_CANCER"
+    (df[x]
+     .groupby(df[hue])
+     .value_counts(normalize=True)
+     .rename(y)
+     .reset_index()
+     .pipe((sns.barplot, "data"), x=x, y=y, hue=hue, ax=ax1))
+plt.title("Proportion plots for independent variables against dependent variable ")
+plt.tight_layout()
+fig.savefig('bivariate.jpeg')
+plt.show()
+
+
+# All variables appeared to have variations in the distribution of the target variable among their categories e.g. proportion plot for `GENDER` against `LUNG_CANCER` above showed lung cancer to be more prevalent among Men than Women.
+# <br>
+# <br>
+# <br>
+# Now let’s test for multicollinearity using Pearson Correlation:
+
+
+# correlation plot
+plt.figure(figsize = [20, 18])
+sns.heatmap(df.corr(), annot = True, fmt = '.3f',
+           cmap = 'vlag_r')
+plt.tight_layout()
+plt.savefig('multi.jpeg') # save the plot
+plt.show()
+
+
+# There are no multicollinearity
+
+
+# ## NB: 
+# This round of exploration is not absolutely thorough; the point is to start off on the right foot
+# and quickly gain insights that will help us get a first reasonably good prototype. But this is an iterative
+# process: once we get a prototype up and running, we can analyze its output to gain more insights and
+# come back to this exploration step.
+
+
+# # 5. Data Preprocessing
+
+
+# Let’s create a copy so we can play with it without harming the original dataset
+clean_df = df.copy()
+
+
+clean_df.head(n=4)
+
+
+print("dataset:", clean_df.shape)
+
+
+# ### Drop Duplicated records
+
+
+clean_df.drop_duplicates(inplace=True)
+
+
+clean_df.duplicated().sum()
+
+
+# ### Categorical Feature Encoding
+
+
+# Encode labels in column 'GENDER'.
+clean_df['GENDER'] = clean_df['GENDER'].map({'M': 1, 'F': 0})
+
+
+# Encode labels in column 'LUNG_CANCER'.
+clean_df['LUNG_CANCER'] = clean_df['LUNG_CANCER'].map({'YES': 1, 'NO': 0})
+
+
+clean_df.head(n=4)
+
+
+print(clean_df['GENDER'].value_counts())
+print("\n")
+print(clean_df['LUNG_CANCER'].value_counts())
+
+
+# ### Data Partitioning
+# 
+# 
+#  This is necessary to have a set of data that will be used to evaluate our models to get the actual generalization score. 
+# To avoid a model that will be highly prone to overfitting: say we look at the test set, we may stumble upon some seemingly
+# interesting pattern in the test data that leads us to select a particular kind of Machine Learning mode and when we estimate the generalization score using the test set, our prediction will be too optimistic and we will launch a system that will not perform as well as expected. This is called data snooping bias.
+# 
+# Creating a test set is theoretically quite simple: just pick some instances randomly and ensured it is stratified (i.e equal ration of the target variable are assigned to the training and the test set). The test set is typically 20% of the
+# dataset which are set aside:
+
+
+# first assign dependent and independent variables
+feature_cols = clean_df.drop(columns=["LUNG_CANCER"]).columns
+X = clean_df[feature_cols] # independent variables
+y = clean_df["LUNG_CANCER"]   # dependent variables
+
+
+X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.2, stratify=y, random_state=42)
+
+
+# check for the distribution of the classes among the sets
+print("General dataset:\n",clean_df["LUNG_CANCER"].value_counts())
+print("\ntrain_set:\n",y_train.value_counts())
+print("\ntest_set:\n",y_test.value_counts())
+
+
+X_train
+
+
+# ###  Feature scaling
+
+
+# make a copy of X_train
+X_train_scaled = X_train.copy()
+
+
+# make a copy of X_test
+X_test_scaled = X_test.copy()
+
+
+scaler = StandardScaler()
+scaler.fit(X_train_scaled)
+
+
+X_train_scaled[X_train_scaled.columns] = scaler.transform(X_train)
+X_train_scaled.head()
+
+
+X_test_scaled[X_test_scaled.columns] = scaler.transform(X_test)
+X_test_scaled.head()
+
+
+y_train.value_counts()
+
+
+# # Model Development
+# 
+# Metrics:
+# 
+# - Accuracy
+# - Precision
+# - Sensitivity/Recall
+# - Specificity
+# - Balanced Accuracy
+# - F1 score
+
+
+# To follow the best convention and ensure a cleaner notebook, I would make functions to perform some of the model development operations which I can apply to the different algorithms.
+# 
+# The functions are as below:
+
+
+all_scores_dict = {} # scores for all models
+
+
+def evaluate_model(actual_target, pred, data_type= "TEST"):
+    """
+    This function returns the evaluation metrics of a model on the test set
+    
+    params:
+        actual_target: actual target for the test set
+        pred: predicted target for the test 
+    """
+    
+    
+
+
+    class_report = metrics.classification_report(actual_target,pred, target_names=['NO', 'YES'])
+    conf_mat = metrics.confusion_matrix(y_true=actual_target, y_pred=pred)
+    
+    acc_score = metrics.accuracy_score(actual_target,pred)
+    prec = metrics.precision_score(actual_target,pred)
+    sensitivity = metrics.recall_score(actual_target,pred)
+    specificity = metrics.recall_score(actual_target,pred, pos_label=0)
+    bal_acc = metrics.balanced_accuracy_score(actual_target, pred)
+    f1_score = metrics.f1_score(actual_target,pred)
+    
+    
+    print(f"\n=========================={data_type}=====================================")    
+    print("confusion matrix: \n", conf_mat)
+    print("\nAccuracy: %.3f"%(acc_score))
+    print("Precision: %.3f"%(prec))
+    print("Sensitivity/recall: %.3f"%(sensitivity))
+    print("Specificity: %.3f"%(specificity))
+    print("Balanced Accuracy: %.3f"%(bal_acc))
+    print("F1 score: %.3f"%(f1_score))
+    print("Classification report: \n",class_report)
+    
+    return [acc_score, prec, sensitivity, specificity, bal_acc, f1_score], conf_mat
+
+
+def plot_confusion_matrix_heatmap(conf_mat, plot_name):
+    """
+    plots the confusion matrix
+    
+    params:
+        conf_mat: confusion matrix
+        plot_name: name to save the plot with 
+    """
+    fig, ax = plot_confusion_matrix(conf_mat=conf_mat,
+                                    show_absolute=True,
+                                    show_normed=True,
+                                    colorbar=True)
+    plt.yticks([0, 1], ['NO', 'YES'])
+    plt.xticks([0, 1], ['NO', 'YES'])
+    fig.savefig(plot_name+".jpeg")
+    plt.show()
+
+
+# ### Algorithm 1: Support Vector Machine Model (SVM)
+
+
+svc_model = SVC(random_state = 42)
+svc_model.fit(X_train_scaled, y_train)
+
+
+# evaluate test set/Generalization scores and add to the score dataframe
+svc_test_pred = svc_model.predict(X_test_scaled)
+all_scores_dict['SVC'], svc_cm = evaluate_model(y_test, svc_test_pred, 'TEST')
+
+
+# Hyperparameter Tuning
+
+
+# defining parameter range
+param_grid_svc = {'kernel': ['rbf','linear','poly'], 'degree':[1,2, 3, 4], 'C': list(range(1,20,1)),'gamma':[0.01 , 0.1, 1, 10]}
+
+
+print("Parameter Grid: ",param_grid_svc)
+
+
+# Define the scoring metric
+scorer = metrics.make_scorer(metrics.balanced_accuracy_score)
+
+
+svc_grid = GridSearchCV(SVC(), param_grid_svc, refit = True, scoring=scorer, cv=3, verbose = 3, n_jobs=-1)
+ 
+# fitting the model for grid search
+svc_grid.fit(X_train_scaled, y_train)
+
+
+# print best parameter after tuning
+print("\n Best parameters: \n",svc_grid.best_params_)
+ 
+# print how our model looks after hyper-parameter tuning
+print("\n Best Estimators: \n",svc_grid.best_estimator_)
+
+
+# try with the optimal parameter and evaluate on test set
+opt_svc = SVC(random_state = 42, degree=1, C=5, gamma=0.1, kernel='poly')
+opt_svc.fit(X_train_scaled, y_train)
+test_pred = opt_svc.predict(X_test_scaled)
+all_scores_dict['SVC_opt'], svc_opt_cm = evaluate_model(y_test, test_pred, 'TEST')
+
+
+plot_confusion_matrix_heatmap(svc_opt_cm, "svc_opt_cm")
+
+
+# ### Algorithm 2: Logistic Regression
+
+
+lr_model = LogisticRegression(random_state = 42)
+lr_model.fit(X_train_scaled, y_train)
+
+
+# evaluate test set/Generalization scores
+lr_test_pred = lr_model.predict(X_test_scaled)
+all_scores_dict['LR'], lr_cm = evaluate_model(y_test, lr_test_pred, 'TEST')
+
+
+# defining parameter range
+lr_param_grid = {'penalty' : ['l1', 'l2'], 
+                 'C' : np.logspace(-4, 7), 
+                 'solver' : ['lbfgs', 'liblinear']}
+
+
+print("Parameter Grid: ",lr_param_grid)
+
+
+lr_grid = GridSearchCV(LogisticRegression(random_state = 42), lr_param_grid, refit = True, scoring='accuracy', cv=3, 
+                       verbose = 3, n_jobs=-1)
+ 
+# fitting the model for grid search
+lr_grid.fit(X_train_scaled, y_train)
+
+
+# print best parameter after tuning
+print("\n Best parameters: \n",lr_grid.best_params_)
+ 
+# print how our model looks after hyper-parameter tuning
+print("\n Best Estimators: \n",lr_grid.best_estimator_)
+
+
+# try with the optimal parameter and evaluate on test set
+opt_lr = LogisticRegression(random_state = 42, C=1.0985411419875573, solver='liblinear', penalty='l2')
+
+
+opt_lr.fit(X_train_scaled, y_train)
+lr_test_pred = opt_lr.predict(X_test_scaled)
+all_scores_dict['LR_opt'], lr_opt_cm = evaluate_model(y_test, lr_test_pred, 'TEST')
+
+
+plot_confusion_matrix_heatmap(lr_opt_cm, "lr_opt_cm")
+
+
+# ### Algorithm 3: K-Neighbors (KNeighborsClassifier)
+
+
+kn_model = KNeighborsClassifier()
+kn_model.fit(X_train_scaled, y_train)
+
+
+# evaluate test set/Generalization scores
+kn_test_pred = kn_model.predict(X_test_scaled)
+all_scores_dict['KNN'], knn_cm = evaluate_model(y_test, kn_test_pred, 'TEST')
+
+
+# defining parameter range
+kn_param_grid = {'n_neighbors' : list(range(2,8,1)), 
+                 'p' : [1, 2], # p=1 - Manhattan Distance p=2 - Euclidean Distance
+                 'weights' : ['uniform', 'distance']           
+                 }
+
+
+print("Parameter Grid: ",kn_param_grid)
+# Define the scoring metric
+scorer = metrics.make_scorer(metrics.balanced_accuracy_score)
+kn_grid = GridSearchCV(KNeighborsClassifier(), kn_param_grid, scoring=scorer, refit = True, cv=5, verbose = 3, n_jobs=-1)
+ 
+# fitting the model for grid search
+kn_grid.fit(X_train_scaled, y_train)
+
+
+# print best parameter after tuning
+print("\n Best parameters: \n",kn_grid.best_params_)
+ 
+# print how our model looks after hyper-parameter tuning
+print("\n Best Estimators: \n",kn_grid.best_estimator_)
+
+
+# try with the optimal parameter and evaluate on test set
+opt_kn = KNeighborsClassifier(n_neighbors=2, p=1, weights='uniform')
+opt_kn.fit(X_train_scaled, y_train)
+kn_test_pred = opt_kn.predict(X_test_scaled)
+all_scores_dict['KNN_opt'], knn_opt_cm = evaluate_model(y_test, kn_test_pred, 'TEST')
+
+
+plot_confusion_matrix_heatmap(knn_opt_cm, "knn_opt_cm")
+
+
+# ### Algorithm 4: Random Forest (RandomForestClassifier)
+
+
+rf_model = RandomForestClassifier(random_state = 42)
+rf_model.fit(X_train_scaled, y_train)
+
+
+# evaluate test set/Generalization scores
+rf_test_pred = rf_model.predict(X_test_scaled)
+all_scores_dict['RF'], rf_cm = evaluate_model(y_test, rf_test_pred, 'TEST')
+
+
+# defining parameter range
+rf_param_grid = {
+    'n_estimators': list(range(100,250,10)),
+    'min_samples_split': [2, 3, 4, 5, 10],
+    'min_samples_leaf': [1, 2, 3, 4],
+    'max_features': list(range(2,8,1)),
+    'criterion':["gini", "entropy"]
+}
+
+
+print("Parameter Grid: ",rf_param_grid)
+
+
+rf_grid = GridSearchCV(RandomForestClassifier(random_state = 42), rf_param_grid, refit = True,
+                       scoring="accuracy", cv=3, verbose = 3, n_jobs=-1)
+ 
+# fitting the model for grid search
+rf_grid.fit(X_train_scaled, y_train)
+
+
+# print best parameter after tuning
+print("\n Best parameters: \n",rf_grid.best_params_)
+ 
+# print how our model looks after hyper-parameter tuning
+print("\n Best Estimators: \n",rf_grid.best_estimator_)
+
+
+# try with the optimal parameter and evaluate on test set
+opt_rf = RandomForestClassifier(max_features=8, min_samples_split=1, n_estimators=100, random_state=42)
+opt_rf.fit(X_train_scaled, y_train)
+rf_test_pred = opt_rf.predict(X_test_scaled)
+all_scores_dict['RF_opt'], rf_opt_cm = evaluate_model(y_test, rf_test_pred, 'TEST')
+
+
+plot_confusion_matrix_heatmap(rf_opt_cm, "rf_opt_cm")
+
+
+# ### Algorithm 5: Gradient Boosting Model (GradientBoostClassifier)
+
+
+gb_model = GradientBoostingClassifier(random_state=42)
+gb_model.fit(X_train_scaled, y_train)
+
+
+# evaluate test set/Generalization scores
+gb_test_pred = gb_model.predict(X_test_scaled)
+all_scores_dict['GBoosting'], gb_cm = evaluate_model(y_test, gb_test_pred, 'TEST')
+
+
+# Gradient Boosting hyperparameter tuning using GridSearchCV (Note: all hyperparameter tuning cells takes a very long time, so DO NOT RERUN)
+
+
+gb_param_grid = {'max_depth':range(1,16,1),
+                 'min_samples_split':range(2,50,2),
+                 'max_features':range(7,20,2),
+                 'min_samples_leaf':range(2,50,2),
+                 'subsample':[0.5,0.6,0.7,0.75,0.8,0.85,0.9],
+                }
+
+
+print("Parameter Grid: ",gb_param_grid)
+
+
+gb_grid = GridSearchCV(estimator = GradientBoostingClassifier(random_state=42, learning_rate=0.05),
+                        param_grid = gb_param_grid, scoring='accuracy',n_jobs=4, cv=3, verbose = 3)
+ 
+# fitting the model for grid search
+gb_grid.fit(X_train_scaled, y_train)
+
+
+# print best parameter after tuning
+print("\n Best parameters: \n",gb_grid.best_params_)
+ 
+# print how our model looks after hyper-parameter tuning
+print("\n Best Estimators: \n",gb_grid.best_estimator_)
+
+
+# try with the optimal parameter and evaluate on test set
+gb_best_params = {'learning_rate':0.01, 'n_estimators':200,'max_depth':6,
+                  'min_samples_split':1, 'min_samples_leaf':1, 'subsample':0.8,
+                  'max_features':6}
+
+
+opt_gb = GradientBoostingClassifier(**gb_best_params, random_state=42)
+opt_gb.fit(X_train_scaled, y_train)
+gb_test_pred = opt_gb.predict(X_test_scaled)
+all_scores_dict['GB_opt'], gb_opt_cm = evaluate_model(y_test, gb_test_pred, 'TEST')
+
+
+plot_confusion_matrix_heatmap(gb_opt_cm, "gb_opt_cm")
+
+
+# ### Algorithm 6: Naive Bayes
+
+
+from sklearn.naive_bayes import GaussianNB
+
+
+gnb_model = GaussianNB()
+gnb_model.fit(X_train_scaled, y_train)
+
+
+gnb_test_pred = gnb_model.predict(X_test_scaled)
+all_scores_dict['NB'], nb_cm = evaluate_model(y_test, gnb_test_pred, 'TEST')
+
+
+nb_param_grid = {'var_smoothing': np.logspace(0,-9, num=100)}
+
+
+print("Parameter Grid: ",nb_param_grid)
+
+
+nb_grid = GridSearchCV(estimator = GaussianNB(),
+                        param_grid = nb_param_grid, scoring='accuracy',n_jobs=-1, cv=3, verbose = 3)
+ 
+# fitting the model for grid search
+nb_grid.fit(X_train_scaled, y_train)
+
+
+# print best parameter after tuning
+print("\n Best parameters: \n",nb_grid.best_params_)
+ 
+# print how our model looks after hyper-parameter tuning
+print("\n Best Estimators: \n",nb_grid.best_estimator_)
+
+
+# try with the optimal parameter and evaluate on test set
+opt_nb = GaussianNB(var_smoothing=0.533669923120631)
+opt_nb.fit(X_train_scaled, y_train)
+
+
+nb_test_pred = opt_nb.predict(X_test_scaled)
+all_scores_dict['NB_opt'], nb_opt_cm = evaluate_model(y_test, nb_test_pred, 'TEST')
+
+
+plot_confusion_matrix_heatmap(nb_opt_cm, "nb_opt_cm")
+
+
+# ### Algorithm 7: Linear Discriminant Analysis
+
+
+from sklearn.discriminant_analysis import LinearDiscriminantAnalysis
+lda_model = LinearDiscriminantAnalysis()
+lda_model.fit(X_train_scaled, y_train)
+
+
+lda_test_pred = lda_model.predict(X_test_scaled)
+all_scores_dict['LDA'], lda_cm = evaluate_model(y_test, lda_test_pred, 'TEST')
+
+
+lda_param_grid = {'solver':['svd', 'lsqr', 'eigen'],
+                  'shrinkage': np.arange(0, 1, 0.01)}
+
+
+print("Parameter Grid: ",lda_param_grid)
+
+
+lda_grid = GridSearchCV(estimator = LinearDiscriminantAnalysis(),
+                        param_grid = lda_param_grid, scoring='accuracy',n_jobs=-1, cv=10, verbose = 3)
+ 
+# fitting the model for grid search
+lda_grid.fit(X_train_scaled, y_train)
+
+
+
+# print best parameter after tuning
+print("\n Best parameters: \n",lda_grid.best_params_)
+ 
+# print how our model looks after hyper-parameter tuning
+print("\n Best Estimators: \n",lda_grid.best_estimator_)
+
+
+# try with the optimal parameter and evaluate on test set
+opt_lda = LinearDiscriminantAnalysis(shrinkage=0.6, solver='lsqr')
+opt_lda.fit(X_train_scaled, y_train)
+lda_test_pred = opt_lda.predict(X_test_scaled)
+all_scores_dict['LDA_opt'], lda_opt_cm = evaluate_model(y_test, lda_test_pred, 'TEST')
+
+
+plot_confusion_matrix_heatmap(lda_opt_cm, "lda_opt_cm")
+
+
+# ### Algorithm 8: Decision Tree
+
+
+from sklearn.tree import DecisionTreeClassifier
+dt_model = DecisionTreeClassifier(random_state=42)
+dt_model.fit(X_train_scaled, y_train)
+
+
+dt_test_pred = dt_model.predict(X_test_scaled)
+all_scores_dict['DT'], dt_cm = evaluate_model(y_test, dt_test_pred, 'TEST')
+
+
+# Create the parameter grid based on the results of random search 
+dt_param_grid = {'max_depth': [None,1, 2, 3, 5, 10, 20],
+                'min_samples_leaf': [1, 2, 4, 5, 10, 20, 50],
+                'criterion': ["gini", "entropy"],
+                'min_samples_split': [1,2, 5, 6, 8, 10],
+                'max_features': ['auto', 'sqrt', 'log2']
+               }
+
+
+print("Parameter Grid: ",dt_param_grid)
+
+
+dt_grid = GridSearchCV(estimator = DecisionTreeClassifier(random_state=42),
+                       param_grid = dt_param_grid, scoring='accuracy',n_jobs=-1, cv=3, verbose = 3)
+
+
+# fitting the model for grid search
+dt_grid.fit(X_train_scaled, y_train)
+
+
+
+# print best parameter after tuning
+print("\n Best parameters: \n",dt_grid.best_params_)
+
+
+# print how our model looks after hyper-parameter tuning
+print("\n Best Estimators: \n",dt_grid.best_estimator_)
+
+
+# try with the optimal parameter and evaluate on test set
+opt_dt = DecisionTreeClassifier(random_state=42) # best params returned performed less than the default params
+
+
+opt_dt.fit(X_train_scaled, y_train)
+dt_test_pred = opt_dt.predict(X_test_scaled)
+all_scores_dict['DT_opt'], dt_opt_cm = evaluate_model(y_test, dt_test_pred, 'TEST')
+
+
+plot_confusion_matrix_heatmap(dt_opt_cm, "dt_opt_cm")
+
+
+# ### Algorithm 9: Bagging
+
+
+from sklearn.ensemble import BaggingClassifier
+
+
+# Create bagging classifier
+bc_model = BaggingClassifier(n_estimators=6,random_state = 22)
+# Fit the model
+bc_model.fit(X_train_scaled, y_train)
+
+
+bc_test_pred = bc_model.predict(X_test_scaled)
+all_scores_dict['Bagging'], bagging_cm = evaluate_model(y_test, bc_test_pred, 'TEST')
+
+
+# Create the parameter grid based on the results of random search 
+bc_param_grid = {'n_estimators':range(1,50,2)}
+
+
+print("Parameter Grid: ",bc_param_grid)
+
+
+bc_grid = GridSearchCV(estimator = BaggingClassifier(random_state = 42),
+                       param_grid = bc_param_grid, scoring='accuracy',n_jobs=-1, cv=10, verbose = 3)
+
+
+# fitting the model for grid search
+bc_grid.fit(X_train_scaled, y_train)
+
+
+
+# print best parameter after tuning
+print("\n Best parameters: \n",bc_grid.best_params_)
+
+
+# print how our model looks after hyper-parameter tuning
+print("\n Best Estimators: \n",bc_grid.best_estimator_)
+
+
+# try with the optimal parameter and evaluate on test set
+opt_bc = BaggingClassifier(n_estimators=15, random_state=42) # best params returned performed less than the default params
+
+
+opt_bc.fit(X_train_scaled, y_train)
+bc_test_pred = opt_bc.predict(X_test_scaled)
+all_scores_dict['Bagging_opt'], bagging_opt_cm = evaluate_model(y_test, bc_test_pred, 'TEST')
+
+
+plot_confusion_matrix_heatmap(bagging_opt_cm, "bagging_opt_cm")
+
+
+# ### Algorithm 10: NeuralNet
+
+
+model = Sequential([Dense(32, activation='relu', kernel_initializer='he_uniform', input_shape=(X_train_scaled.shape[-1],)),
+                    Dense(100, activation='relu', kernel_initializer='he_uniform'),
+                    Dense(64, activation='relu', kernel_initializer='he_uniform'),
+                    Dense(1, activation='sigmoid')
+                   ]
+                  )
+model.summary()
+
+
+model.compile(optimizer='adam',
+              loss='binary_crossentropy',
+              metrics=['accuracy'])
+
+
+# Train the model
+history = model.fit(X_train_scaled, y_train, batch_size=64, epochs=100, 
+                    validation_data=(X_test_scaled,y_test))
+
+
+nn_test_pred = model.predict(X_test_scaled).round()
+all_scores_dict['NN'], nn_cm = evaluate_model(y_test, nn_test_pred, 'TEST')
+
+
+# define model
+reg_param = 0.003
+initializer = tf.keras.initializers.HeUniform(seed=46)
+opt_model = Sequential(
+                [Dense(64,activation='relu', kernel_initializer=initializer, input_shape=(X_train_scaled.shape[-1],),
+                       kernel_regularizer = regularizers.l1(reg_param)),
+                 Dense(128,activation='relu', kernel_initializer=initializer, kernel_regularizer = regularizers.l1(reg_param)),
+                 Dropout(0.15),
+                 Dense(64,activation='relu', kernel_initializer=initializer, kernel_regularizer = regularizers.l1(reg_param)),
+                 Dense(16,activation='relu', kernel_initializer=initializer, kernel_regularizer = regularizers.l1(reg_param)),
+                 Dropout(0.15),
+                 Dense(1, activation='sigmoid')
+                 ]
+                    )
+
+
+# compile model
+opt_model.compile(optimizer=Adam(learning_rate = 0.008), 
+              loss='binary_crossentropy', 
+              metrics=['accuracy'])
+
+
+# train model
+history = opt_model.fit(X_train_scaled, y_train, epochs=50, 
+                    validation_data=(X_test_scaled,y_test))
+
+
+opt_nn_test_pred = opt_model.predict(X_test_scaled).round()
+all_scores_dict['NN_opt'], nn_opt_cm = evaluate_model(y_test, opt_nn_test_pred, 'TEST')
+
+
+plot_confusion_matrix_heatmap(nn_opt_cm, "nn_opt_cm")
+
+
+# # Summary of Result
+
+
+metric_score_indices = ['Accuracy', 'Precision', 'Recall', 'Specificity', 'Balanced Accuracy', 'F1 score']
+score_df = pd.DataFrame(all_scores_dict,index=metric_score_indices).T.round(3)
+
+
+score_df
+
+
+score_df[~score_df.index.str.contains('opt', regex=False)]
+
+
+score_df[score_df.index.str.contains('opt', regex=False)]
+
+
+# # Feature Importance using Random Forest model
+
+
+fig, ax = plt.subplots()
+(pd.Series(rf_model.feature_importances_*100, index=X_test_scaled.columns).sort_values().plot(kind='barh', 
+                                                                                              figsize=(8,8), ax=ax))
+fig.set_size_inches(8, 6)
+# plt.title("Plot of Feature Importance")
+plt.xlabel("Importance (%)")
+plt.ylabel("Feature names")
+plt.savefig('feature_importance.jpeg',bbox_inches='tight')
+plt.show()
+
+
